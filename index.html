@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video Looer</title>
+    <title>Video Looper</title>
     <style>
         * {
             margin: 0;
@@ -350,12 +350,12 @@
             }
             
             async renderFrames(totalFrames, dissolveFrames, fps) {
-                const frameInterval = 1000 / fps; // ms per frame
                 let currentFrame = 0;
+                const loopFrames = totalFrames + dissolveFrames; // Total frames for one complete loop
                 
                 const renderFrame = () => {
                     return new Promise((resolve) => {
-                        const progress = currentFrame / totalFrames;
+                        const progress = currentFrame / loopFrames;
                         const time = (currentFrame / fps) % this.sourceVideo.duration;
                         
                         // Update progress
@@ -384,8 +384,8 @@
                     });
                 };
                 
-                // Render all frames
-                for (currentFrame = 0; currentFrame < totalFrames * 2; currentFrame++) {
+                // Render one complete loop (original video + dissolve transition)
+                for (currentFrame = 0; currentFrame < loopFrames; currentFrame++) {
                     await renderFrame();
                     await new Promise(resolve => setTimeout(resolve, 16)); // Small delay for stability
                 }
