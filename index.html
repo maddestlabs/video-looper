@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Loop Creator</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ffmpeg/0.12.10/ffmpeg.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #3E2723;
+            min-height: 100vh;
+            color: white;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+        }
+
+        .header h1 svg {
+            width: 40px;
+            height: 40px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+            color: white;
+        }
+
+        .upload-section {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 40px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .file-upload {
+            position: relative;
+            display: inline-block;
+            cursor: pointer;
+            width: 100%;
+        }
+
+        .file-upload input {
+            display: none;
+        }
+
+        .file-upload-label {
+            display: block;
+            padding: 20px;
+            border: 2px dashed rgba(255,255,255,0.3);
+            border-radius: 8px;
+            text-align: center;
+            transition: all 0.3s ease;
+            background: rgba(255,255,255,0.02);
+            color: white;
+        }
+
+        .file-upload-label:hover {
+            border-color: yellow;
+            background: rgba(255,255,0,0.05);
+        }
+
+        .controls {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 20px;
+            align-items: center;
+            margin-top: 20px;
+        }
+
+        .dissolve-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: white;
+        }
+
+        .dissolve-control label {
+            white-space: nowrap;
+        }
+
+        .dissolve-control input {
+            padding: 8px 12px;
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 4px;
+            background: rgba(255,255,255,0.1);
+            color: white;
+            width: 80px;
+        }
+
+        .dissolve-control input::placeholder {
+            color: rgba(255,255,255,0.7);
+        }
+
+        .dissolve-control input:focus {
+            outline: none;
+            border-color: yellow;
+        }
+
+        .process-btn {
+            background: linear-gradient(45deg, #FFD700, #FFA500);
+            border: none;
+            padding: 12px 30px;
+            border-radius: 6px;
+            color: #3E2723;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 1em;
+        }
+
+        .process-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(255,215,0,0.3);
+        }
+
+        .process-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .progress-section {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(255,255,255,0.1);
+            display: none;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 15px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(45deg, #FFD700, #FFA500);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .result-section {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 30px;
+            border: 1px solid rgba(255,255,255,0.1);
+            display: none;
+        }
+
+        .video-preview {
+            width: 100%;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .download-btn {
+            background: linear-gradient(45deg, #FFD700, #FFA500);
+            border: none;
+            padding: 12px 30px;
+            border-radius: 6px;
+            color: #3E2723;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 1em;
+            width: 100%;
+        }
+
+        .download-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(255,215,0,0.3);
+        }
+
+        .status {
+            text-align: center;
+            margin-bottom: 15px;
+            font-weight: 500;
+            color: white;
+        }
+
+        @media (max-width: 600px) {
+            .controls {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>
+                <svg viewBox="0 0 24 24" fill="white">
+                    <path d="M17,10.5V7A1,1 0 0,0 16,6H4A1,1 0 0,0 3,7V17A1,1 0 0,0 4,18H16A1,1 0 0,0 17,17V13.5L21,17.5V6.5L17,10.5Z"/>
+                </svg>
+                Video Loop Creator
+            </h1>
+            <p>Create seamless video loops with smooth dissolve transitions - entirely in your browser</p>
+        </div>
+
+        <div class="upload-section">
+            <div class="file-upload">
+                <input type="file" id="videoFile" accept="video/*">
+                <label for="videoFile" class="file-upload-label">
+                    <div style="margin-bottom: 10px;">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="white" style="display: inline-block;">
+                            <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
+                        </svg>
+                    </div>
+                    <div>Click to select a video file</div>
+                    <div style="font-size: 0.9em; opacity: 0.8; margin-top: 5px;">Supports MP4, MOV, AVI, and more</div>
+                </label>
+            </div>
+
+            <div class="controls">
+                <div class="dissolve-control">
+                    <label for="dissolveDuration">Dissolve duration:</label>
+                    <input type="number" id="dissolveDuration" value="1" min="0.1" max="5" step="0.1" placeholder="1.0">
+                    <span>seconds</span>
+                </div>
+                <button id="processBtn" class="process-btn" disabled>Create Loop</button>
+            </div>
+        </div>
+
+        <div id="progressSection" class="progress-section">
+            <div class="status" id="status">Initializing...</div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+        </div>
+
+        <div id="resultSection" class="result-section">
+            <video id="resultVideo" class="video-preview" controls loop></video>
+            <button id="downloadBtn" class="download-btn">Download Looped Video</button>
+        </div>
+    </div>
+
+    <script>
+        let ffmpeg = null;
+        let videoFile = null;
+        let processedVideoBlob = null;
+
+        // Initialize FFmpeg
+        async function initFFmpeg() {
+            if (ffmpeg) return;
+            
+            ffmpeg = new FFmpeg();
+            
+            ffmpeg.on('log', ({ message }) => {
+                console.log(message);
+            });
+
+            ffmpeg.on('progress', ({ progress }) => {
+                const percent = Math.round(progress * 100);
+                document.getElementById('progressFill').style.width = percent + '%';
+                document.getElementById('status').textContent = `Processing... ${percent}%`;
+            });
+
+            await ffmpeg.load({
+                coreURL: 'https://cdnjs.cloudflare.com/ajax/libs/ffmpeg/0.12.10/ffmpeg-core.js'
+            });
+        }
+
+        // File input handler
+        document.getElementById('videoFile').addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                videoFile = file;
+                document.getElementById('processBtn').disabled = false;
+                
+                // Update label to show selected file
+                const label = document.querySelector('.file-upload-label');
+                label.innerHTML = `
+                    <div style="margin-bottom: 10px;">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="white" style="display: inline-block;">
+                            <path d="M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M11,16.5L18,9.5L16.59,8.09L11,13.67L7.91,10.59L6.5,12L11,16.5Z"/>
+                        </svg>
+                    </div>
+                    <div>Selected: ${file.name}</div>
+                    <div style="font-size: 0.9em; opacity: 0.8; margin-top: 5px;">Ready to process</div>
+                `;
+            }
+        });
+
+        // Process button handler
+        document.getElementById('processBtn').addEventListener('click', async () => {
+            if (!videoFile) return;
+
+            try {
+                document.getElementById('processBtn').disabled = true;
+                document.getElementById('progressSection').style.display = 'block';
+                document.getElementById('resultSection').style.display = 'none';
+                document.getElementById('status').textContent = 'Initializing FFmpeg...';
+
+                // Initialize FFmpeg
+                await initFFmpeg();
+
+                // Get dissolve duration
+                const dissolveDuration = parseFloat(document.getElementById('dissolveDuration').value) || 1.0;
+
+                // Write input file
+                const inputFileName = 'input.mp4';
+                const outputFileName = 'output.mp4';
+                
+                document.getElementById('status').textContent = 'Loading video...';
+                await ffmpeg.writeFile(inputFileName, new Uint8Array(await videoFile.arrayBuffer()));
+
+                // Get video duration first
+                document.getElementById('status').textContent = 'Analyzing video...';
+                await ffmpeg.exec(['-i', inputFileName, '-t', '0.1', '-f', 'null', '-']);
+                
+                // Create the looped video with dissolve
+                document.getElementById('status').textContent = 'Creating seamless loop...';
+                
+                await ffmpeg.exec([
+                    '-i', inputFileName,
+                    '-filter_complex', `
+                        [0:v]split=2[first][second];
+                        [0:v]trim=end_frame=1[firstframe];
+                        [firstframe]loop=loop=-1:size=1:start=0[stillframe];
+                        [first]trim=start=0[first_half];
+                        [second]trim=start=0[second_half];
+                        [first_half]split[f1][f2];
+                        [second_half]split[s1][s2];
+                        [f2][s1]xfade=transition=fade:duration=${dissolveDuration}:offset=0[transition];
+                        [f1][transition][s2]concat=n=3:v=1:a=0[looped_video];
+                        [0:a]aloop=loop=1:size=44100[looped_audio]
+                    `,
+                    '-map', '[looped_video]',
+                    '-map', '[looped_audio]',
+                    '-c:v', 'libx264',
+                    '-c:a', 'aac',
+                    '-shortest',
+                    outputFileName
+                ]);
+
+                // Read the output
+                document.getElementById('status').textContent = 'Finalizing...';
+                const data = await ffmpeg.readFile(outputFileName);
+                
+                // Create blob and show result
+                processedVideoBlob = new Blob([data], { type: 'video/mp4' });
+                const videoURL = URL.createObjectURL(processedVideoBlob);
+                
+                const resultVideo = document.getElementById('resultVideo');
+                resultVideo.src = videoURL;
+                
+                document.getElementById('progressSection').style.display = 'none';
+                document.getElementById('resultSection').style.display = 'block';
+                document.getElementById('processBtn').disabled = false;
+
+            } catch (error) {
+                console.error('Error processing video:', error);
+                document.getElementById('status').textContent = 'Error processing video. Please try again.';
+                document.getElementById('processBtn').disabled = false;
+            }
+        });
+
+        // Download button handler
+        document.getElementById('downloadBtn').addEventListener('click', () => {
+            if (!processedVideoBlob) return;
+
+            const url = URL.createObjectURL(processedVideoBlob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `looped_${videoFile.name}`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+    </script>
+</body>
+</html>
