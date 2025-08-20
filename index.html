@@ -87,7 +87,7 @@
 
         .controls {
             display: grid;
-            grid-template-columns: 1fr auto;
+            grid-template-columns: 1fr 1fr auto;
             gap: 20px;
             align-items: center;
             margin-top: 20px;
@@ -120,6 +120,21 @@
         .dissolve-control input:focus {
             outline: none;
             border-color: yellow;
+        }
+
+        .format-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: white;
+        }
+
+        .format-control select {
+            padding: 8px 12px;
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 4px;
+            background: rgba(255,255,255,0.1);
+            color: white;
         }
 
         .process-btn {
@@ -234,7 +249,7 @@
                 </svg>
                 Video Loop Creator
             </h1>
-            <p>Create seamless video loops with smooth dissolve transitions - entirely in your browser</p>
+            <p>Create seamless video loops with smooth dissolve transitions - now with proper framerate and MP4 support</p>
         </div>
 
         <div class="upload-section">
@@ -256,6 +271,13 @@
                     <label for="dissolveDuration">Dissolve duration:</label>
                     <input type="number" id="dissolveDuration" value="1" min="0.1" max="5" step="0.1" placeholder="1.0">
                     <span>seconds</span>
+                </div>
+                <div class="format-control">
+                    <label for="outputFormat">Output format:</label>
+                    <select id="outputFormat">
+                        <option value="webm">WebM (VP9)</option>
+                        <option value="mp4">MP4 (H.264)</option>
+                    </select>
                 </div>
                 <button id="processBtn" class="process-btn" disabled>Create Loop</button>
             </div>
@@ -281,6 +303,7 @@
     <script>
         let videoFile = null;
         let processedVideoBlob = null;
+        let outputFormat = 'webm';
 
         class VideoLooper {
             constructor() {
@@ -291,7 +314,7 @@
                 this.recordedChunks = [];
             }
 
-            async createLoop(file, dissolveDuration = 1.0) {
+            async createLoop(file, dissolveDuration = 1.0, format = 'webm') {
                 return new Promise((resolve, reject) => {
                     this.sourceVideo.onloadedmetadata = async () => {
                         try {
@@ -302,16 +325,50 @@
                             this.canvas.height = this.sourceVideo.videoHeight;
                             
                             const duration = this.sourceVideo.duration;
-                            const fps = 30; // Target FPS
-                            const totalFrames = Math.floor(duration * fps);
-                            const dissolveFrames = Math.floor(dissolveDuration * fps);
                             
-                            console.log(`Duration: ${duration}s, Total frames: ${totalFrames}, Dissolve frames: ${dissolveFrames}`);
+                            // Detect original video framerate
+                            const detectedFps = await this.detectFramerate() || 25;
                             
-                            // Setup MediaRecorder
+                            // MediaRecorder often can't keep up with high framerates
+                            // Use a more conservative approach for better consistency
+                            let fps;
+                            if (detectedFps <= 24) {
+                                fps = detectedFps;
+                            } else if (detectedFps <= 30) {
+                                fps = 24; // More achievable for MediaRecorder
+                            } else {
+                                fps = 24; // Cap at 24fps for consistency
+                            }
+                            
+                            console.log(`Duration: ${duration}s, Detected FPS: ${detectedFps}, Using: ${fps} (MediaRecorder optimized)`);
+                            
+                            // Pre-extract frames for better performance
+                            document.getElementById('status').textContent = 'Pre-processing frames...';
+                            const frames = await this.extractFrames(duration, fps);
+                            
+                            // Setup MediaRecorder with automatic capture at detected FPS
                             const stream = this.canvas.captureStream(fps);
+                            
+                            let mimeType;
+                            let videoBitsPerSecond = 3000000; // Reduced for better performance
+                            
+                            if (format === 'mp4') {
+                                if (MediaRecorder.isTypeSupported('video/mp4;codecs=h264')) {
+                                    mimeType = 'video/mp4;codecs=h264';
+                                } else if (MediaRecorder.isTypeSupported('video/mp4')) {
+                                    mimeType = 'video/mp4';
+                                } else {
+                                    console.warn('MP4 not supported, falling back to WebM');
+                                    mimeType = 'video/webm;codecs=vp9';
+                                    format = 'webm';
+                                }
+                            } else {
+                                mimeType = 'video/webm;codecs=vp9';
+                            }
+                            
                             this.mediaRecorder = new MediaRecorder(stream, {
-                                mimeType: 'video/webm;codecs=vp9'
+                                mimeType: mimeType,
+                                videoBitsPerSecond: videoBitsPerSecond
                             });
                             
                             this.recordedChunks = [];
@@ -322,15 +379,17 @@
                             };
                             
                             this.mediaRecorder.onstop = () => {
-                                const blob = new Blob(this.recordedChunks, { type: 'video/webm' });
+                                const blob = new Blob(this.recordedChunks, { 
+                                    type: format === 'mp4' ? 'video/mp4' : 'video/webm' 
+                                });
                                 resolve(blob);
                             };
                             
                             // Start recording
                             this.mediaRecorder.start();
                             
-                            // Render frames
-                            await this.renderFrames(totalFrames, dissolveFrames, fps);
+                            // Render frames using pre-extracted frames
+                            await this.renderPreExtractedFrames(frames, dissolveDuration, fps);
                             
                             // Stop recording
                             this.mediaRecorder.stop();
@@ -349,49 +408,245 @@
                 });
             }
             
-            async renderFrames(totalFrames, dissolveFrames, fps) {
-                let currentFrame = 0;
-                const loopFrames = totalFrames + dissolveFrames; // Total frames for one complete loop
-                
-                const renderFrame = () => {
-                    return new Promise((resolve) => {
-                        const progress = currentFrame / loopFrames;
-                        const time = (currentFrame / fps) % this.sourceVideo.duration;
+            async detectFramerate() {
+                try {
+                    // Method 1: Try to detect from video metadata
+                    if (this.sourceVideo.videoTracks && this.sourceVideo.videoTracks.length > 0) {
+                        const track = this.sourceVideo.videoTracks[0];
+                        if (track.getSettings && track.getSettings().frameRate) {
+                            return track.getSettings().frameRate;
+                        }
+                    }
+                    
+                    // Method 2: Estimate by sampling frame changes
+                    const sampleDuration = Math.min(1.0, this.sourceVideo.duration); // Sample first second
+                    const samplePoints = 60; // Check 60 points in the sample duration
+                    let frameChanges = 0;
+                    let lastImageData = null;
+                    
+                    // Create a small sampling canvas for faster comparison
+                    const sampleCanvas = document.createElement('canvas');
+                    sampleCanvas.width = 32;
+                    sampleCanvas.height = 32;
+                    const sampleCtx = sampleCanvas.getContext('2d');
+                    
+                    for (let i = 0; i < samplePoints; i++) {
+                        const time = (i / samplePoints) * sampleDuration;
+                        await this.seekToTime(time);
                         
-                        // Update progress
-                        document.getElementById('progressFill').style.width = (progress * 100) + '%';
-                        document.getElementById('status').textContent = `Rendering... ${Math.round(progress * 100)}%`;
+                        // Draw scaled down version for comparison
+                        sampleCtx.drawImage(this.sourceVideo, 0, 0, 32, 32);
+                        const imageData = sampleCtx.getImageData(0, 0, 32, 32);
                         
-                        // Seek to the current time
-                        this.sourceVideo.currentTime = time;
-                        
-                        this.sourceVideo.onseeked = () => {
-                            // Calculate if we're in the dissolve region
-                            const endTime = this.sourceVideo.duration;
-                            const dissolveStart = endTime - (dissolveFrames / fps);
-                            
-                            if (time >= dissolveStart) {
-                                // Render dissolve frame
-                                const dissolveProgress = (time - dissolveStart) / (dissolveFrames / fps);
-                                this.renderDissolveFrame(time, dissolveProgress);
-                            } else {
-                                // Render normal frame
-                                this.ctx.drawImage(this.sourceVideo, 0, 0, this.canvas.width, this.canvas.height);
+                        if (lastImageData) {
+                            // Compare with previous frame
+                            let diff = 0;
+                            for (let j = 0; j < imageData.data.length; j += 4) {
+                                diff += Math.abs(imageData.data[j] - lastImageData.data[j]) +
+                                       Math.abs(imageData.data[j + 1] - lastImageData.data[j + 1]) +
+                                       Math.abs(imageData.data[j + 2] - lastImageData.data[j + 2]);
                             }
                             
-                            resolve();
-                        };
-                    });
-                };
-                
-                // Render one complete loop (original video + dissolve transition)
-                for (currentFrame = 0; currentFrame < loopFrames; currentFrame++) {
-                    await renderFrame();
-                    await new Promise(resolve => setTimeout(resolve, 16)); // Small delay for stability
+                            // If significant difference, count as new frame
+                            if (diff > 1000) {
+                                frameChanges++;
+                            }
+                        }
+                        
+                        lastImageData = imageData;
+                    }
+                    
+                    // Estimate FPS from frame changes
+                    const estimatedFps = Math.round((frameChanges / sampleDuration) * 1.2); // Small correction factor
+                    
+                    // Clamp to reasonable values and round to common framerates
+                    const commonFramerates = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60];
+                    let closestFps = estimatedFps;
+                    
+                    if (estimatedFps > 10 && estimatedFps < 70) {
+                        // Find closest common framerate
+                        let minDiff = Infinity;
+                        for (const commonFps of commonFramerates) {
+                            const diff = Math.abs(estimatedFps - commonFps);
+                            if (diff < minDiff) {
+                                minDiff = diff;
+                                closestFps = commonFps;
+                            }
+                        }
+                    }
+                    
+                    console.log(`Frame detection: ${frameChanges} changes in ${sampleDuration}s, estimated: ${estimatedFps}, using: ${closestFps}`);
+                    return closestFps;
+                    
+                } catch (error) {
+                    console.warn('Framerate detection failed:', error);
+                    return null;
                 }
             }
             
-            renderDissolveFrame(currentTime, dissolveProgress) {
+            async extractFrames(duration, fps) {
+                const totalFrames = Math.ceil(duration * fps);
+                const frames = [];
+                
+                for (let i = 0; i < totalFrames; i++) {
+                    const time = (i / fps) % duration;
+                    await this.seekToTime(time);
+                    
+                    // Create canvas for this frame
+                    const frameCanvas = document.createElement('canvas');
+                    frameCanvas.width = this.canvas.width;
+                    frameCanvas.height = this.canvas.height;
+                    const frameCtx = frameCanvas.getContext('2d');
+                    frameCtx.drawImage(this.sourceVideo, 0, 0);
+                    
+                    frames.push(frameCanvas);
+                    
+                    // Update progress
+                    const progress = i / totalFrames;
+                    document.getElementById('progressFill').style.width = (progress * 50) + '%'; // 50% for extraction
+                    document.getElementById('status').textContent = `Pre-processing... ${Math.round(progress * 100)}%`;
+                }
+                
+                return frames;
+            }
+            
+            async renderPreExtractedFrames(frames, dissolveDuration, fps) {
+                const totalFrames = frames.length;
+                const dissolveFrames = Math.ceil(dissolveDuration * fps);
+                const frameDuration = 1000 / fps;
+                
+                let frameCount = 0;
+                
+                const renderFrame = async () => {
+                    const frameIndex = frameCount % totalFrames;
+                    const videoTime = frameCount / fps;
+                    const duration = totalFrames / fps;
+                    const dissolveStart = duration - dissolveDuration;
+                    
+                    // Update progress (50% offset from extraction phase)
+                    const progress = frameCount / totalFrames;
+                    document.getElementById('progressFill').style.width = (50 + progress * 50) + '%';
+                    document.getElementById('status').textContent = `Rendering at ${fps}fps... ${Math.round(progress * 100)}% (${frameCount}/${totalFrames})`;
+                    
+                    if ((videoTime % duration) >= dissolveStart && dissolveDuration > 0) {
+                        // Render dissolve frame
+                        const dissolveProgress = ((videoTime % duration) - dissolveStart) / dissolveDuration;
+                        this.renderDissolveFrameFromCanvas(frames[frameIndex], frames[0], dissolveProgress);
+                    } else {
+                        // Render normal frame
+                        this.ctx.drawImage(frames[frameIndex], 0, 0);
+                    }
+                    
+                    frameCount++;
+                    
+                    if (frameCount < totalFrames) {
+                        // Give MediaRecorder time to process each frame
+                        // Use a slightly longer delay to ensure MediaRecorder keeps up
+                        const delay = Math.max(frameDuration * 0.8, 16); // At least 16ms, but usually 80% of frame duration
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        return renderFrame();
+                    }
+                };
+                
+                await renderFrame();
+            }
+            
+            renderDissolveFrameFromCanvas(currentFrame, firstFrame, dissolveProgress) {
+                // Clear canvas
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                // Draw current frame (fading out)
+                this.ctx.globalAlpha = 1 - dissolveProgress;
+                this.ctx.drawImage(currentFrame, 0, 0);
+                
+                // Draw first frame (fading in)
+                this.ctx.globalAlpha = dissolveProgress;
+                this.ctx.drawImage(firstFrame, 0, 0);
+                
+                // Reset alpha
+                this.ctx.globalAlpha = 1;
+            }
+            
+            async renderFramesWithSmoothTiming(duration, dissolveDuration, fps) {
+                const totalFrames = Math.ceil(duration * fps);
+                const frameDuration = 1000 / fps; // milliseconds per frame
+                let frameCount = 0;
+                
+                // Pre-load the first frame for dissolve
+                await this.seekToTime(0);
+                const firstFrameCanvas = document.createElement('canvas');
+                firstFrameCanvas.width = this.canvas.width;
+                firstFrameCanvas.height = this.canvas.height;
+                const firstFrameCtx = firstFrameCanvas.getContext('2d');
+                firstFrameCtx.drawImage(this.sourceVideo, 0, 0);
+                
+                const startTime = performance.now();
+                
+                const animationLoop = () => {
+                    return new Promise((resolve) => {
+                        const animate = async () => {
+                            const currentTime = performance.now() - startTime;
+                            const expectedFrame = Math.floor(currentTime / frameDuration);
+                            
+                            // Only render if we need to catch up to the expected frame
+                            if (frameCount <= expectedFrame && frameCount < totalFrames) {
+                                const frameTime = frameCount / fps;
+                                const videoTime = frameTime % duration;
+                                
+                                // Update progress
+                                const progress = frameCount / totalFrames;
+                                document.getElementById('progressFill').style.width = (progress * 100) + '%';
+                                document.getElementById('status').textContent = `Rendering at ${fps}fps... ${Math.round(progress * 100)}% (${frameCount}/${totalFrames})`;
+                                
+                                // Check if we're in dissolve region
+                                const dissolveStart = duration - dissolveDuration;
+                                if (videoTime >= dissolveStart && dissolveDuration > 0) {
+                                    const dissolveProgress = (videoTime - dissolveStart) / dissolveDuration;
+                                    await this.renderDissolveFrame(videoTime, dissolveProgress, firstFrameCanvas);
+                                } else {
+                                    // Render normal frame
+                                    await this.seekToTime(videoTime);
+                                    this.ctx.drawImage(this.sourceVideo, 0, 0, this.canvas.width, this.canvas.height);
+                                }
+                                
+                                frameCount++;
+                            }
+                            
+                            if (frameCount < totalFrames) {
+                                requestAnimationFrame(animate);
+                            } else {
+                                resolve();
+                            }
+                        };
+                        
+                        animate();
+                    });
+                };
+                
+                await animationLoop();
+            }
+            
+            async seekToTime(time) {
+                return new Promise((resolve) => {
+                    if (Math.abs(this.sourceVideo.currentTime - time) < 0.1) {
+                        resolve();
+                        return;
+                    }
+                    
+                    const onSeeked = () => {
+                        this.sourceVideo.removeEventListener('seeked', onSeeked);
+                        resolve();
+                    };
+                    
+                    this.sourceVideo.addEventListener('seeked', onSeeked);
+                    this.sourceVideo.currentTime = time;
+                });
+            }
+            
+            async renderDissolveFrame(currentTime, dissolveProgress, firstFrameCanvas) {
+                // Seek to current time and wait
+                await this.seekToTime(currentTime);
+                
                 // Clear canvas
                 this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
                 
@@ -399,17 +654,12 @@
                 this.ctx.globalAlpha = 1 - dissolveProgress;
                 this.ctx.drawImage(this.sourceVideo, 0, 0, this.canvas.width, this.canvas.height);
                 
-                // Create a temporary video element for the beginning frame
-                const tempVideo = document.createElement('video');
-                tempVideo.src = this.sourceVideo.src;
-                tempVideo.currentTime = 0;
+                // Draw first frame (fading in)
+                this.ctx.globalAlpha = dissolveProgress;
+                this.ctx.drawImage(firstFrameCanvas, 0, 0);
                 
-                tempVideo.onseeked = () => {
-                    // Draw beginning frame (fading in)
-                    this.ctx.globalAlpha = dissolveProgress;
-                    this.ctx.drawImage(tempVideo, 0, 0, this.canvas.width, this.canvas.height);
-                    this.ctx.globalAlpha = 1; // Reset alpha
-                };
+                // Reset alpha
+                this.ctx.globalAlpha = 1;
             }
         }
 
@@ -434,6 +684,10 @@
             }
         });
 
+        document.getElementById('outputFormat').addEventListener('change', (event) => {
+            outputFormat = event.target.value;
+        });
+
         document.getElementById('processBtn').addEventListener('click', async () => {
             if (!videoFile) return;
 
@@ -446,7 +700,7 @@
                 const dissolveDuration = parseFloat(document.getElementById('dissolveDuration').value) || 1.0;
                 
                 console.log('Starting video loop creation...');
-                processedVideoBlob = await videoLooper.createLoop(videoFile, dissolveDuration);
+                processedVideoBlob = await videoLooper.createLoop(videoFile, dissolveDuration, outputFormat);
                 
                 const videoURL = URL.createObjectURL(processedVideoBlob);
                 const resultVideo = document.getElementById('resultVideo');
@@ -468,8 +722,9 @@
 
             const url = URL.createObjectURL(processedVideoBlob);
             const a = document.createElement('a');
+            const extension = outputFormat === 'mp4' ? 'mp4' : 'webm';
             a.href = url;
-            a.download = `looped_${videoFile.name.replace(/\.[^/.]+$/, '')}.webm`;
+            a.download = `looped_${videoFile.name.replace(/\.[^/.]+$/, '')}.${extension}`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
